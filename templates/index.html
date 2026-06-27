@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Konverter Font → Dataset</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>Konverter Font → Dataset</h1>
+      <p class="sub">Ubah font (.otf / .ttf / .ttc) jadi dataset <code>.jsonl</code> untuk fine-tuning.
+        Semua diproses <strong>lokal</strong> di komputermu — tidak ada data yang keluar.</p>
+    </header>
+
+    <!-- ===== 1. UPLOAD ===== -->
+    <section class="card">
+      <h2><span class="step">1</span> Pilih Font</h2>
+      <div id="drop" class="dropzone">
+        <div class="drop-inner">
+          <svg viewBox="0 0 24 24" class="icon" aria-hidden="true"><path d="M12 16V4m0 0L8 8m4-4l4 4M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>
+          <p><strong>Tarik &amp; lepas</strong> file font di sini</p>
+          <p class="muted">atau</p>
+          <div class="btn-row">
+            <button type="button" class="btn" id="pickFiles">Pilih File</button>
+            <button type="button" class="btn ghost" id="pickFolder">Pilih Folder</button>
+          </div>
+          <p class="muted small">Menerima <code>.otf</code>, <code>.ttf</code>, <code>.ttc</code> — bisa ratusan sekaligus.</p>
+        </div>
+        <input type="file" id="fileInput" multiple accept=".otf,.ttf,.ttc,.OTF,.TTF,.TTC" hidden>
+        <input type="file" id="folderInput" webkitdirectory directory multiple hidden>
+      </div>
+      <div id="fileSummary" class="file-summary hidden"></div>
+    </section>
+
+    <!-- ===== 2. OPSI TAGGING ===== -->
+    <section class="card">
+      <h2><span class="step">2</span> Opsi Tagging</h2>
+      <p class="muted small">Akurasi tag ada di tanganmu — pilih mode sesuai isi batch.</p>
+
+      <div class="mode-list">
+        <label class="mode">
+          <input type="radio" name="mode" value="default" checked>
+          <div>
+            <span class="mode-title">Kategori default</span>
+            <span class="mode-desc">Satu kategori untuk semua font di batch ini. Paling praktis untuk batch homogen.</span>
+            <input type="text" id="defaultCategory" class="text-in" placeholder="mis. high-contrast serif display">
+          </div>
+        </label>
+
+        <label class="mode">
+          <input type="radio" name="mode" value="folder">
+          <div>
+            <span class="mode-title">Berbasis folder</span>
+            <span class="mode-desc">Nama subfolder jadi kategori (mis. <code>Serif/</code>, <code>Sans/</code>, <code>Script/</code>).
+              Pilih lewat tombol <em>Pilih Folder</em> agar struktur terjaga.</span>
+          </div>
+        </label>
+
+        <label class="mode">
+          <input type="radio" name="mode" value="auto">
+          <div>
+            <span class="mode-title">Otomatis
+              <span class="info" data-tip="Pakai PANOSE + petunjuk nama font. Tidak selalu akurat — banyak font mengosongkan metadata PANOSE.">ⓘ</span>
+            </span>
+            <span class="mode-desc">Deteksi dari metadata PANOSE &amp; nama font. Praktis tapi bisa meleset.</span>
+          </div>
+        </label>
+      </div>
+
+      <label class="check">
+        <input type="checkbox" id="detectContrast">
+        <span>Estimasi kontras dari bentuk
+          <span class="info" data-tip="Menebak high/low-contrast dari render glyph 'O'. Bantuan saja — kadang meleset.">ⓘ</span>
+          <span class="muted small">(bantuan, kadang meleset)</span>
+        </span>
+      </label>
+
+      <details class="adv">
+        <summary>Opsi lanjutan</summary>
+        <div class="grid">
+          <label>Karakter diekstrak
+            <input type="text" id="chars" class="text-in mono"
+                   value="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789">
+          </label>
+          <div class="row2">
+            <label>val-split
+              <input type="number" id="valSplit" class="text-in" value="0.05" step="0.01" min="0" max="0.9">
+            </label>
+            <label>max-path-len
+              <input type="number" id="maxPathLen" class="text-in" value="1600" step="100" min="100">
+            </label>
+          </div>
+        </div>
+      </details>
+    </section>
+
+    <!-- ===== 3. KONVERSI ===== -->
+    <section class="card">
+      <h2><span class="step">3</span> Konversi</h2>
+      <button type="button" class="btn primary big" id="convertBtn" disabled>Konversi</button>
+
+      <div id="progress" class="progress-wrap hidden">
+        <div class="bar"><div class="bar-fill" id="barFill"></div></div>
+        <p class="prog-text"><span id="progText">Memproses…</span></p>
+        <p class="muted small mono" id="progFile"></p>
+      </div>
+
+      <div id="errorBox" class="error-box hidden"></div>
+    </section>
+
+    <!-- ===== 4. HASIL ===== -->
+    <section class="card hidden" id="resultCard">
+      <h2><span class="step">✓</span> Selesai</h2>
+      <div id="resultSummary"></div>
+      <div class="dl-row" id="downloads"></div>
+      <button type="button" class="btn ghost" id="resetBtn">Konversi batch baru</button>
+    </section>
+
+    <footer>
+      <p class="muted small">Berjalan 100% lokal • Logika ekstraksi dari <code>font_to_dataset.py</code></p>
+    </footer>
+  </div>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

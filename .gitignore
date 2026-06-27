@@ -1,0 +1,17 @@
+# Direktori kerja hasil konversi (font mentah + dataset per-job)
+jobs/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
+
+# Output dataset langsung dari CLI
+*_train.jsonl
+*_val.jsonl
+dataset*.jsonl
+
+# OS
+.DS_Store
