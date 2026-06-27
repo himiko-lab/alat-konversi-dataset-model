@@ -11,6 +11,8 @@ const fileSummary = el("fileSummary");
 const convertBtn = el("convertBtn");
 
 let selectedFiles = []; // { file, rel }
+let previewId = null;    // sesi preview di backend
+let previewReady = false; // tabel preview sudah tampil minimal sekali
 
 /* ---------------- pemilihan file ---------------- */
 function extOK(name) {
@@ -32,7 +34,7 @@ function setFiles(list) {
 function renderFileSummary(rejected) {
   if (selectedFiles.length === 0) {
     fileSummary.classList.add("hidden");
-    convertBtn.disabled = true;
+    resetPreview();
     if (rejected > 0) {
       fileSummary.classList.remove("hidden");
       fileSummary.innerHTML = `<span class="badge">Ditolak</span> ${rejected} file bukan font (.otf/.ttf/.ttc) diabaikan.`;
@@ -40,7 +42,6 @@ function renderFileSummary(rejected) {
     return;
   }
   fileSummary.classList.remove("hidden");
-  convertBtn.disabled = false;
   let html = `<strong>${selectedFiles.length}</strong> file font siap dikonversi.`;
   if (rejected > 0) html += ` <span class="badge">${rejected} ditolak</span>`;
   const names = selectedFiles.slice(0, 6).map((f) => f.file.name).join(", ");
@@ -48,6 +49,13 @@ function renderFileSummary(rejected) {
     selectedFiles.length > 6 ? ` … (+${selectedFiles.length - 6} lagi)` : ""
   }</div>`;
   fileSummary.innerHTML = html;
+  setupPreview(); // unggah sampel & tampilkan pratinjau tag
+}
+
+function updateConvertEnabled() {
+  const ready = selectedFiles.length > 0 && previewReady;
+  convertBtn.disabled = !ready;
+  el("convertHint").classList.toggle("hidden", ready);
 }
 
 function filesFromInput(input) {
@@ -61,9 +69,11 @@ el("pickFiles").addEventListener("click", () => fileInput.click());
 el("pickFolder").addEventListener("click", () => folderInput.click());
 fileInput.addEventListener("change", () => setFiles(filesFromInput(fileInput)));
 folderInput.addEventListener("change", () => {
-  setFiles(filesFromInput(folderInput));
-  // Kalau pengguna pilih folder, mode "Berbasis folder" paling masuk akal.
-  if (selectedFiles.length) document.querySelector('input[name=mode][value=folder]').checked = true;
+  const picked = filesFromInput(folderInput);
+  // Kalau pengguna pilih folder, mode "Berbasis folder" paling masuk akal —
+  // set SEBELUM setFiles agar pratinjau langsung pakai mode yang benar.
+  if (picked.length) document.querySelector('input[name=mode][value=folder]').checked = true;
+  setFiles(picked);
 });
 
 /* ---------------- drag & drop (termasuk folder) ---------------- */
@@ -170,16 +180,179 @@ async function startConversion() {
   }
 }
 
+function effectiveCategory() {
+  const preset = el("categoryPreset").value;
+  if (preset === "__custom__") return el("defaultCategory").value.trim();
+  return preset; // "" berarti belum dipilih
+}
+
+function currentMode() {
+  return document.querySelector("input[name=mode]:checked").value;
+}
+
 function collectOptions(jobId) {
   return {
     job_id: jobId,
-    mode: document.querySelector("input[name=mode]:checked").value,
-    default_category: el("defaultCategory").value,
+    mode: currentMode(),
+    default_category: effectiveCategory(),
     detect_contrast: el("detectContrast").checked,
     chars: el("chars").value,
     val_split: parseFloat(el("valSplit").value),
     max_path_len: parseInt(el("maxPathLen").value, 10),
   };
+}
+
+/* ---------------- preview tag (live) ---------------- */
+// Tampilkan/sembunyikan input kustom saat preset "(kustom…)" dipilih.
+el("categoryPreset").addEventListener("change", () => {
+  const custom = el("categoryPreset").value === "__custom__";
+  el("defaultCategory").classList.toggle("hidden", !custom);
+  if (custom) el("defaultCategory").focus();
+  refreshPreview();
+});
+
+// Opsi apa pun berubah -> perbarui pratinjau (debounce).
+let previewTimer = null;
+function refreshPreview() {
+  if (!previewId) return;
+  clearTimeout(previewTimer);
+  previewTimer = setTimeout(doPreview, 250);
+}
+["change", "input"].forEach((ev) => {
+  document.querySelectorAll("input[name=mode], #defaultCategory, #detectContrast").forEach((n) =>
+    n.addEventListener(ev, refreshPreview)
+  );
+});
+
+function rootNameOf(files) {
+  // Nama folder root bersama (komponen pertama) bila semua file berbagi sama.
+  const firsts = new Set();
+  for (const f of files) {
+    const parts = f.rel.replace(/\\/g, "/").split("/").filter(Boolean);
+    if (parts.length >= 2) firsts.add(parts[0]);
+  }
+  return firsts.size === 1 ? [...firsts][0] : "";
+}
+
+function pickSample(files, n) {
+  if (files.length <= n) return files.slice();
+  // Ambil merata di seluruh daftar agar variasi folder/gaya terwakili.
+  const step = files.length / n;
+  const out = [];
+  for (let i = 0; i < n; i++) out.push(files[Math.floor(i * step)]);
+  return out;
+}
+
+async function setupPreview() {
+  resetPreview(false);
+  el("previewHint").classList.add("hidden");
+  setPreviewLoading("Menyiapkan pratinjau…");
+  try {
+    const sample = pickSample(selectedFiles, 8);
+    const fd = new FormData();
+    for (const item of sample) {
+      fd.append("files", item.file, item.file.name);
+      fd.append("paths", item.rel);
+    }
+    fd.append("root_name", rootNameOf(selectedFiles));
+    const res = await fetch("/api/preview_upload", { method: "POST", body: fd });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Gagal menyiapkan pratinjau.");
+    previewId = data.preview_id;
+    await doPreview();
+  } catch (err) {
+    setPreviewLoading("⚠ " + err.message);
+  }
+}
+
+async function doPreview() {
+  if (!previewId) return;
+  setPreviewLoading("Menghitung tag sampel…");
+  try {
+    const res = await fetch("/api/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        preview_id: previewId,
+        mode: currentMode(),
+        default_category: effectiveCategory(),
+        detect_contrast: el("detectContrast").checked,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Gagal membuat pratinjau.");
+    renderPreview(data);
+    previewReady = true;
+    updateConvertEnabled();
+  } catch (err) {
+    setPreviewLoading("⚠ " + err.message);
+  }
+}
+
+function setPreviewLoading(msg) {
+  el("previewArea").innerHTML = `<p class="preview-loading">${escapeHtml(msg)}</p>`;
+}
+
+function renderPreview(data) {
+  const rows = data.rows || [];
+  renderWarnings(data);
+
+  const nUniq = data.n_unique_desc || 0;
+  const consistent = nUniq <= 1;
+  let html = `<div class="preview-meta">
+    <span class="pill ${consistent ? "ok" : "warn"}">Deskriptor unik: ${nUniq}${consistent ? " ✓" : ""}</span>
+    <span class="muted small">menampilkan ${rows.length} font sampel</span>
+  </div>`;
+
+  html += `<table class="preview-table"><thead><tr>
+    <th>File</th><th>Tag yang akan dihasilkan</th></tr></thead><tbody>`;
+  for (const r of rows) {
+    if (!r.tag) {
+      html += `<tr class="bad"><td class="fname">${escapeHtml(r.name)}</td>
+        <td class="tag">⚠ tak terbaca / bukan font valid</td></tr>`;
+      continue;
+    }
+    const src = r.source ? `<span class="src-tag">${escapeHtml(r.source)}</span>` : "";
+    html += `<tr><td class="fname">${escapeHtml(r.name)}</td>
+      <td class="tag">${escapeHtml(r.tag)}${src}</td></tr>`;
+  }
+  html += `</tbody></table>`;
+  el("previewArea").innerHTML = html;
+}
+
+function renderWarnings(data) {
+  const w = el("warnings");
+  const banners = [];
+  if (data.no_category) {
+    banners.push(
+      `⚠️ <strong>Kategori belum dipilih</strong> — tag akan jatuh ke deteksi otomatis (PANOSE/nama font) ` +
+      `dan bisa tidak konsisten. Pilih kategori di "Kategori default" agar seluruh batch seragam.`
+    );
+  } else if (data.generic_serif) {
+    banners.push(
+      `⚠️ Sebagian font jatuh ke kategori <code>serif</code> generik (metadata kosong). ` +
+      `Kalau itu bukan serif, pilih kategori yang sesuai.`
+    );
+  }
+  if ((data.detect_contrast || data.mode === "auto" || data.no_category) && data.n_unique_desc > 1) {
+    banners.push(
+      `⚠️ <strong>Label tidak konsisten</strong> — terdeteksi ${data.n_unique_desc} deskriptor berbeda ` +
+      `untuk batch ini. Kalau batch-nya satu-gaya, pakai <strong>"Kategori default"</strong> ` +
+      `(dan matikan estimasi kontras) agar seragam.`
+    );
+  }
+  w.innerHTML = banners.map((b) => `<div class="warn-banner">${b}</div>`).join("");
+}
+
+function resetPreview(clearArea = true) {
+  previewId = null;
+  previewReady = false;
+  el("warnings").innerHTML = "";
+  if (clearArea) {
+    el("previewArea").innerHTML =
+      `<p class="muted small" id="previewHint">Pilih file/folder dulu untuk melihat contoh tag.</p>`;
+  }
+  updateConvertEnabled();
 }
 
 function listenProgress(jobId) {
@@ -232,6 +405,18 @@ function showResult(jobId, r) {
     ${stat(r.train, "train")}
     ${stat(r.val, "val")}
   </div>`;
+
+  const nUniq = r.n_unique_desc || 0;
+  const consistent = nUniq <= 1;
+  html += `<div class="dist"><h3>Konsistensi tag</h3>
+    <p class="muted small" style="margin:0 0 8px">Deskriptor kategori unik:
+      <strong style="color:${consistent ? "var(--ok)" : "#ffd479"}">${nUniq}</strong>
+      ${nUniq === 1 ? "(konsisten ✓)" : "(campuran — idealnya 1 untuk batch satu-gaya)"}</p>
+    <div class="chip-row">${
+      Object.keys(r.descriptors || {})
+        .map((k) => `<span class="chip">${escapeHtml(k)}<b>${r.descriptors[k]}</b></span>`)
+        .join("")
+    }</div></div>`;
 
   html += distBlock("Kategori", r.categories);
   html += distBlock("Berat", r.weights);
@@ -287,6 +472,7 @@ el("resetBtn").addEventListener("click", () => {
   fileInput.value = "";
   folderInput.value = "";
   fileSummary.classList.add("hidden");
+  resetPreview(true);
   el("resultCard").classList.add("hidden");
   el("errorBox").classList.add("hidden");
   el("progress").classList.add("hidden");

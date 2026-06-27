@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Konverter Font → Dataset</title>
+  <link rel="icon" href="data:,">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
@@ -43,9 +44,22 @@
         <label class="mode">
           <input type="radio" name="mode" value="default" checked>
           <div>
-            <span class="mode-title">Kategori default</span>
-            <span class="mode-desc">Satu kategori untuk semua font di batch ini. Paling praktis untuk batch homogen.</span>
-            <input type="text" id="defaultCategory" class="text-in" placeholder="mis. high-contrast serif display">
+            <span class="mode-title">Kategori default <span class="muted small">(berlaku untuk SELURUH batch)</span></span>
+            <span class="mode-desc">Satu kategori untuk semua font di batch ini. Paling konsisten untuk batch satu-gaya.</span>
+            <select id="categoryPreset" class="text-in">
+              <option value="">— pilih kategori —</option>
+              <option value="high-contrast serif display">high-contrast serif display</option>
+              <option value="serif">serif</option>
+              <option value="slab-serif">slab-serif</option>
+              <option value="sans-serif">sans-serif</option>
+              <option value="geometric sans-serif">geometric sans-serif</option>
+              <option value="handwriting script">handwriting script</option>
+              <option value="monospace">monospace</option>
+              <option value="decorative display">decorative display</option>
+              <option value="__custom__">(kustom…)</option>
+            </select>
+            <input type="text" id="defaultCategory" class="text-in hidden"
+                   placeholder="ketik kategori kustom, mis. high-contrast serif display">
           </div>
         </label>
 
@@ -72,7 +86,7 @@
       <label class="check">
         <input type="checkbox" id="detectContrast">
         <span>Estimasi kontras dari bentuk
-          <span class="info" data-tip="Menebak high/low-contrast dari render glyph 'O'. Bantuan saja — kadang meleset.">ⓘ</span>
+          <span class="info" data-tip="Menebak high/low-contrast dari render glyph 'O'. Bantuan saja — kadang meleset. Untuk batch satu-gaya lebih baik pakai 'Kategori default' agar konsisten.">ⓘ</span>
           <span class="muted small">(bantuan, kadang meleset)</span>
         </span>
       </label>
@@ -96,10 +110,22 @@
       </details>
     </section>
 
+    <!-- ===== 2½. PRATINJAU TAG ===== -->
+    <section class="card" id="previewCard">
+      <h2><span class="step">★</span> Pratinjau Tag</h2>
+      <p class="muted small">Lihat tag yang AKAN dihasilkan dari beberapa font sampel, sebelum memproses semuanya.
+        Ubah opsi di atas — tabel ini ikut berubah otomatis.</p>
+      <div id="warnings"></div>
+      <div id="previewArea">
+        <p class="muted small" id="previewHint">Pilih file/folder dulu untuk melihat contoh tag.</p>
+      </div>
+    </section>
+
     <!-- ===== 3. KONVERSI ===== -->
     <section class="card">
       <h2><span class="step">3</span> Konversi</h2>
-      <button type="button" class="btn primary big" id="convertBtn" disabled>Konversi</button>
+      <button type="button" class="btn primary big" id="convertBtn" disabled>Konversi Semua</button>
+      <p class="muted small" id="convertHint" style="margin:8px 0 0">Tinjau pratinjau tag di atas dulu, lalu tombol ini aktif.</p>
 
       <div id="progress" class="progress-wrap hidden">
         <div class="bar"><div class="bar-fill" id="barFill"></div></div>

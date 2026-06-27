@@ -195,6 +195,7 @@ def classify(font, family, subfamily, fname, opts, contrast_est):
     if attr["width"]!="normal": parts.append(f"{attr['width']} width")
     parts.append(f"{attr['weight']} weight")
     parts.append("italic style" if it else "normal style")
+    attr["desc"]=desc   # deskriptor kategori (untuk cek konsistensi tag)
     return ", ".join(parts), attr
 
 
@@ -253,9 +254,38 @@ def process_font(path, chars, max_len, opts, stats):
             out.append((tag,ch,f'<path d="{d}"/>')); n+=1
         if n<8: stats["skipped"].append((fname,f"cuma {n} glyph"))
         stats["cat"][attr["category"]]+=1; stats["wt"][attr["weight"]]+=1
-        stats["src"][attr["source"]]+=1; stats["ok"]+=1
+        stats["src"][attr["source"]]+=1; stats["desc"][attr["desc"]]+=1; stats["ok"]+=1
         stats["sample"].append((family,tag))
     return out
+
+
+def preview_tag(path, opts, folder_tag=None):
+    """Hitung tag yang AKAN dihasilkan untuk sebuah font tanpa mengekstrak
+    glyph (cepat, untuk preview di web). Memakai classify() yang sama persis
+    seperti konversi penuh, jadi hasilnya identik.
+
+    Mengembalikan dict {family, tag, desc, category, source} atau None bila
+    font tak bisa dibaca.
+    """
+    fonts = list(iter_fonts(path))
+    if not fonts:
+        return None
+    font = fonts[0]
+    contrast_est = estimate_contrast(path) if opts.get("detect_contrast") else None
+    fname = os.path.basename(path)
+    try:
+        family, subfamily = get_names(font)
+    except Exception:
+        family, subfamily = "Unknown", ""
+    fopts = {"csv": opts.get("csv", []), "folder_tag": folder_tag,
+             "default_cat": opts.get("default_cat"),
+             "detect_contrast": opts.get("detect_contrast", False)}
+    try:
+        tag, attr = classify(font, family, subfamily, fname, fopts, contrast_est)
+    except Exception:
+        return None
+    return {"family": family, "tag": tag, "desc": attr.get("desc"),
+            "category": attr["category"], "source": attr["source"]}
 
 
 def to_record(style,ch,path):
@@ -268,7 +298,7 @@ def to_record(style,ch,path):
 def new_stats():
     """Wadah statistik kosong — dipakai CLI maupun app.py."""
     return {"ok":0,"too_long":0,"skipped":[],"cat":Counter(),"wt":Counter(),
-            "src":Counter(),"sample":[]}
+            "src":Counter(),"desc":Counter(),"sample":[]}
 
 
 def folder_tag_for(rel_path, root_name=None):

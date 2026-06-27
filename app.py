@@ -41,6 +41,7 @@ os.makedirs(WORK_ROOT, exist_ok=True)
 
 # Registry job dalam memori (cukup untuk pemakaian lokal satu pengguna).
 JOBS = {}
+PREVIEWS = {}            # preview_id -> {samples:[{name,rel,path}], root_name}
 JOBS_LOCK = threading.Lock()
 
 
@@ -50,6 +51,29 @@ def _job_dir(job_id):
 
 def _allowed(name):
     return name.lower().endswith(ALLOWED_EXT)
+
+
+def _build_fopts(mode, category, folder_tag, detect_contrast):
+    """Bangun opsi tagging yang dipakai SAMA persis oleh preview & konversi.
+
+    Mode 'Kategori default' dialirkan lewat jalur CSV override (pola "" cocok ke
+    semua nama file) — di classify() itu prioritas TERTINGGI, jadi kategori
+    pilihan pengguna memaksa SELURUH batch jadi seragam (mengalahkan PANOSE/
+    petunjuk nama). Mode 'folder' memakai nama subfolder (prioritas di atas
+    PANOSE). Mode 'auto' membiarkan PANOSE + petunjuk nama bekerja.
+    Logika classify() sendiri TIDAK diubah."""
+    csv = [("", category, None)] if (mode == "default" and category) else []
+    return {"csv": csv,
+            "folder_tag": folder_tag if mode == "folder" else None,
+            "default_cat": None,
+            "detect_contrast": detect_contrast}
+
+
+def _safe_rel(rel, fallback):
+    rel = (rel or "").replace("\\", "/").lstrip("/")
+    parts = [secure_filename(p) for p in rel.split("/") if p not in ("", ".", "..")]
+    parts = [p for p in parts if p] or [secure_filename(fallback)]
+    return "/".join(parts), parts
 
 
 # --------------------------------------------------------------------------- #
@@ -75,17 +99,14 @@ def upload():
     accepted, rejected, root_names = [], [], set()
     for idx, fs in enumerate(files):
         rel = rel_paths[idx] if idx < len(rel_paths) and rel_paths[idx] else fs.filename
-        rel = (rel or "").replace("\\", "/").lstrip("/")
-        base = os.path.basename(rel)
+        base = os.path.basename((rel or "").replace("\\", "/").lstrip("/"))
         if not base or not _allowed(base):
             if base:
                 rejected.append(base)
             continue
 
         # Bersihkan tiap komponen path tapi pertahankan struktur folder.
-        parts = [secure_filename(p) for p in rel.split("/") if p not in ("", ".", "..")]
-        parts = [p for p in parts if p] or [secure_filename(base)]
-        safe_rel = "/".join(parts)
+        safe_rel, parts = _safe_rel(rel, base)
         if len(parts) >= 2:
             root_names.add(parts[0])
 
@@ -125,6 +146,83 @@ def upload():
         rejected=rejected,
         names=[a["name"] for a in accepted[:50]],
     )
+
+
+# --------------------------------------------------------------------------- #
+#  PREVIEW TAG (sampel font, sebelum konversi penuh)                           #
+# --------------------------------------------------------------------------- #
+@app.route("/api/preview_upload", methods=["POST"])
+def preview_upload():
+    """Unggah HANYA font sampel (5–10) untuk preview tag cepat. Terpisah dari
+    upload penuh supaya preview ringan & bisa live saat opsi diubah."""
+    files = request.files.getlist("files")
+    rel_paths = request.form.getlist("paths")
+    root_name = (request.form.get("root_name") or "").strip() or None
+    if not files:
+        return jsonify(error="Tidak ada sampel."), 400
+
+    preview_id = uuid.uuid4().hex
+    pdir = os.path.join(_job_dir("preview_" + preview_id), "sample")
+    os.makedirs(pdir, exist_ok=True)
+
+    samples = []
+    for idx, fs in enumerate(files):
+        rel = rel_paths[idx] if idx < len(rel_paths) and rel_paths[idx] else fs.filename
+        base = os.path.basename((rel or "").replace("\\", "/").lstrip("/"))
+        if not base or not _allowed(base):
+            continue
+        safe_rel, _ = _safe_rel(rel, base)
+        dst = os.path.join(pdir, secure_filename(base))
+        fs.save(dst)
+        samples.append({"name": base, "rel": safe_rel, "path": dst})
+
+    if not samples:
+        return jsonify(error="Sampel tidak valid."), 400
+
+    with JOBS_LOCK:
+        PREVIEWS[preview_id] = {"samples": samples, "root_name": root_name,
+                                "dir": _job_dir("preview_" + preview_id)}
+    return jsonify(preview_id=preview_id, count=len(samples))
+
+
+@app.route("/api/preview", methods=["POST"])
+def preview():
+    """Hitung tag untuk sampel dengan opsi saat ini. Live: dipanggil ulang
+    tiap kali pengguna mengubah mode/kategori/kontras (tanpa unggah ulang)."""
+    data = request.get_json(force=True, silent=True) or {}
+    with JOBS_LOCK:
+        pv = PREVIEWS.get(data.get("preview_id"))
+    if not pv:
+        return jsonify(error="Sesi preview tidak ditemukan. Pilih file lagi."), 404
+
+    mode = data.get("mode", "auto")
+    default_category = (data.get("default_category") or "").strip() or None
+    detect_contrast = bool(data.get("detect_contrast"))
+
+    rows, descs = [], Counter()
+    for s in pv["samples"]:
+        folder_tag = fd.folder_tag_for(s["rel"], pv["root_name"]) if mode == "folder" else None
+        fopts = _build_fopts(mode, default_category, folder_tag, detect_contrast)
+        info = fd.preview_tag(s["path"], fopts, folder_tag=fopts["folder_tag"])
+        if info is None:
+            rows.append({"name": s["name"], "rel": s["rel"], "tag": None,
+                         "desc": None, "source": "unreadable"})
+            continue
+        descs[info["desc"]] += 1
+        rows.append({"name": s["name"], "rel": s["rel"], "tag": info["tag"],
+                     "desc": info["desc"], "category": info["category"],
+                     "source": info["source"]})
+
+    readable = [r for r in rows if r["tag"]]
+    unique_desc = dict(descs.most_common())
+    # Apakah ada yang jatuh ke default generik 'serif'?
+    generic = any(r.get("source") == "default" and r.get("category") == "serif"
+                  for r in readable)
+    no_category = mode == "default" and not default_category
+
+    return jsonify(rows=rows, unique_desc=unique_desc,
+                   n_unique_desc=len(unique_desc), generic_serif=generic,
+                   no_category=no_category, mode=mode, detect_contrast=detect_contrast)
 
 
 # --------------------------------------------------------------------------- #
@@ -194,13 +292,8 @@ def _run_job(job, opts):
                 if opts["mode"] == "folder":
                     folder_tag = fd.folder_tag_for(finfo["rel"], job.get("root_name"))
 
-                fopts = {
-                    "csv": [],
-                    "folder_tag": folder_tag,
-                    "default_cat": opts["default_category"] if opts["mode"] == "default" else (
-                        opts["default_category"] if opts["mode"] == "folder" else None),
-                    "detect_contrast": opts["detect_contrast"],
-                }
+                fopts = _build_fopts(opts["mode"], opts["default_category"],
+                                     folder_tag, opts["detect_contrast"])
 
                 try:
                     recs = fd.process_font(finfo["path"], opts["chars"],
@@ -287,6 +380,7 @@ def _build_summary(stats, n_records, n_train, n_val, opts):
     cat = dict(stats["cat"].most_common())
     wt = dict(stats["wt"].most_common())
     src = dict(stats["src"].most_common())
+    desc = dict(stats["desc"].most_common())
     skipped = [{"name": nm, "reason": why} for nm, why in stats["skipped"]]
 
     sample, seen = [], set()
@@ -306,6 +400,11 @@ def _build_summary(stats, n_records, n_train, n_val, opts):
     lines.append(f"Glyph dilewati     : {stats['too_long']} (path terlalu panjang)")
     lines.append(f"Karakter           : {opts['chars']}")
     lines.append(f"val-split          : {opts['val_split']}  |  max-path-len: {opts['max_path_len']}")
+    lines.append("")
+    lines.append(f"Deskriptor kategori unik: {len(desc)}"
+                 + ("  (konsisten ✓)" if len(desc) == 1 else "  (campur)"))
+    for d, n in desc.items():
+        lines.append(f"   {str(d):28s} {n}")
     lines.append("")
     lines.append("KATEGORI:")
     for c, n in cat.items():
@@ -337,6 +436,8 @@ def _build_summary(stats, n_records, n_train, n_val, opts):
         "categories": cat,
         "weights": wt,
         "sources": src,
+        "descriptors": desc,
+        "n_unique_desc": len(desc),
         "skipped": skipped,
         "sample_tags": sample,
         "has_val": n_val > 0,

@@ -16,6 +16,17 @@ kompatibel dengan pipeline training yang sudah ada.
 
 - **Upload jumbo** — drag-and-drop, pilih banyak file, atau seret/pilih satu
   folder utuh (`webkitdirectory`) agar struktur folder terjaga.
+- **Pratinjau tag (live)** — sebelum memproses ribuan glyph, lihat dulu tag yang
+  akan dihasilkan dari beberapa font sampel. Tabel ikut berubah otomatis saat
+  opsi diubah. Tombol "Konversi Semua" baru aktif setelah pratinjau tampil.
+- **Kategori dipandu** — dropdown preset (mis. `high-contrast serif display`,
+  `sans-serif`, `monospace`, …) + opsi kustom. Mode "Kategori default" kini
+  **memaksa kategori seragam** untuk seluruh batch (lewat jalur CSV-override
+  prioritas tertinggi), jadi tidak lagi terganggu metadata PANOSE per font.
+- **Peringatan otomatis** — banner muncul bila kategori belum dipilih atau bila
+  deteksi otomatis menghasilkan label tidak konsisten untuk batch satu-gaya.
+- **Cek konsistensi** — ringkasan menampilkan "Deskriptor kategori unik: N"
+  (idealnya 1 untuk batch homogen).
 - **3 mode tagging:**
   - **Kategori default** — satu kategori untuk seluruh batch (paling praktis
     untuk batch homogen, mis. `high-contrast serif display`).
