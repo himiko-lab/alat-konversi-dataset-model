@@ -27,9 +27,10 @@
             <button type="button" class="btn" id="pickFiles">Pilih File</button>
             <button type="button" class="btn ghost" id="pickFolder">Pilih Folder</button>
           </div>
-          <p class="muted small">Menerima <code>.otf</code>, <code>.ttf</code>, <code>.ttc</code> — bisa ratusan sekaligus.</p>
+          <p class="muted small">Menerima <code>.otf</code>, <code>.ttf</code>, <code>.ttc</code>, atau <code>.zip</code> — bisa ratusan sekaligus.</p>
+          <p class="muted small">📦 ZIP otomatis diekstrak; file non-font di dalamnya langsung dibuang.</p>
         </div>
-        <input type="file" id="fileInput" multiple accept=".otf,.ttf,.ttc,.OTF,.TTF,.TTC" hidden>
+        <input type="file" id="fileInput" multiple accept=".otf,.ttf,.ttc,.zip,.OTF,.TTF,.TTC,.ZIP" hidden>
         <input type="file" id="folderInput" webkitdirectory directory multiple hidden>
       </div>
       <div id="fileSummary" class="file-summary hidden"></div>

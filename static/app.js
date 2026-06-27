@@ -1,7 +1,7 @@
 /* app.js — Konverter Font -> Dataset (frontend lokal, vanilla JS) */
 "use strict";
 
-const ALLOWED = [".otf", ".ttf", ".ttc"];
+const ALLOWED = [".otf", ".ttf", ".ttc", ".zip"];
 
 const el = (id) => document.getElementById(id);
 const drop = el("drop");
@@ -11,7 +11,7 @@ const fileSummary = el("fileSummary");
 const convertBtn = el("convertBtn");
 
 let selectedFiles = []; // { file, rel }
-let previewId = null;    // sesi preview di backend
+let currentJobId = null;  // job di backend (font sudah diunggah & diekstrak)
 let previewReady = false; // tabel preview sudah tampil minimal sekali
 
 /* ---------------- pemilihan file ---------------- */
@@ -42,14 +42,29 @@ function renderFileSummary(rejected) {
     return;
   }
   fileSummary.classList.remove("hidden");
-  let html = `<strong>${selectedFiles.length}</strong> file font siap dikonversi.`;
-  if (rejected > 0) html += ` <span class="badge">${rejected} ditolak</span>`;
-  const names = selectedFiles.slice(0, 6).map((f) => f.file.name).join(", ");
-  html += `<div class="muted small" style="margin-top:6px">${names}${
-    selectedFiles.length > 6 ? ` … (+${selectedFiles.length - 6} lagi)` : ""
-  }</div>`;
+  const hasZip = selectedFiles.some((f) => f.file.name.toLowerCase().endsWith(".zip"));
+  fileSummary.innerHTML =
+    `<strong>${selectedFiles.length}</strong> item dipilih` +
+    (rejected > 0 ? ` <span class="badge">${rejected} ditolak</span>` : "") +
+    `<div class="muted small" style="margin-top:6px">` +
+    (hasZip ? "Mengunggah &amp; mengekstrak ZIP…" : "Mengunggah…") + `</div>`;
+  uploadAndPreview(); // unggah semua, ekstrak ZIP, lalu pratinjau tag
+}
+
+function updateFileSummaryAfterUpload(data) {
+  const bits = [`<strong>${data.accepted}</strong> font siap dikonversi`];
+  if (data.from_zip > 0) bits.push(`${data.from_zip} dari ZIP`);
+  if (data.discarded > 0) bits.push(`${data.discarded} non-font dibuang`);
+  let html = bits.join(" · ") + ".";
+  if (data.rejected && data.rejected.length)
+    html += ` <span class="badge">${data.rejected.length} file ditolak</span>`;
+  if (data.names && data.names.length) {
+    const shown = data.names.slice(0, 6).join(", ");
+    html += `<div class="muted small" style="margin-top:6px">${escapeHtml(shown)}${
+      data.accepted > 6 ? ` … (+${data.accepted - 6} lagi)` : ""
+    }</div>`;
+  }
   fileSummary.innerHTML = html;
-  setupPreview(); // unggah sampel & tampilkan pratinjau tag
 }
 
 function updateConvertEnabled() {
@@ -141,28 +156,17 @@ function lockUI(lock) {
 }
 
 async function startConversion() {
-  if (!selectedFiles.length) return;
+  if (!currentJobId) return; // font sudah diunggah saat pemilihan file
   el("errorBox").classList.add("hidden");
   el("resultCard").classList.add("hidden");
   el("progress").classList.remove("hidden");
-  setProgress(0, selectedFiles.length, "Mengunggah font…");
+  setProgress(0, 1, "Memulai…");
   el("progFile").textContent = "";
   lockUI(true);
   convertBtn.textContent = "Memproses…";
 
   try {
-    // 1) Upload
-    const fd = new FormData();
-    for (const item of selectedFiles) {
-      fd.append("files", item.file, item.file.name);
-      fd.append("paths", item.rel);
-    }
-    const upRes = await fetch("/api/upload", { method: "POST", body: fd });
-    const up = await upRes.json();
-    if (!upRes.ok) throw new Error(up.error || "Upload gagal.");
-
-    // 2) Mulai konversi
-    const opts = collectOptions(up.job_id);
+    const opts = collectOptions(currentJobId);
     const cRes = await fetch("/api/convert", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -171,12 +175,11 @@ async function startConversion() {
     const c = await cRes.json();
     if (!cRes.ok) throw new Error(c.error || "Gagal memulai konversi.");
 
-    // 3) Dengarkan progress (SSE)
-    listenProgress(up.job_id);
+    listenProgress(currentJobId); // dengarkan progress (SSE)
   } catch (err) {
     showError(err.message);
     lockUI(false);
-    convertBtn.textContent = "Konversi";
+    convertBtn.textContent = "Konversi Semua";
   }
 }
 
@@ -214,7 +217,7 @@ el("categoryPreset").addEventListener("change", () => {
 // Opsi apa pun berubah -> perbarui pratinjau (debounce).
 let previewTimer = null;
 function refreshPreview() {
-  if (!previewId) return;
+  if (!currentJobId) return;
   clearTimeout(previewTimer);
   previewTimer = setTimeout(doPreview, 250);
 }
@@ -224,56 +227,37 @@ function refreshPreview() {
   );
 });
 
-function rootNameOf(files) {
-  // Nama folder root bersama (komponen pertama) bila semua file berbagi sama.
-  const firsts = new Set();
-  for (const f of files) {
-    const parts = f.rel.replace(/\\/g, "/").split("/").filter(Boolean);
-    if (parts.length >= 2) firsts.add(parts[0]);
-  }
-  return firsts.size === 1 ? [...firsts][0] : "";
-}
-
-function pickSample(files, n) {
-  if (files.length <= n) return files.slice();
-  // Ambil merata di seluruh daftar agar variasi folder/gaya terwakili.
-  const step = files.length / n;
-  const out = [];
-  for (let i = 0; i < n; i++) out.push(files[Math.floor(i * step)]);
-  return out;
-}
-
-async function setupPreview() {
+async function uploadAndPreview() {
   resetPreview(false);
   el("previewHint").classList.add("hidden");
-  setPreviewLoading("Menyiapkan pratinjau…");
+  setPreviewLoading("Mengunggah & menyiapkan…");
   try {
-    const sample = pickSample(selectedFiles, 8);
     const fd = new FormData();
-    for (const item of sample) {
+    for (const item of selectedFiles) {
       fd.append("files", item.file, item.file.name);
       fd.append("paths", item.rel);
     }
-    fd.append("root_name", rootNameOf(selectedFiles));
-    const res = await fetch("/api/preview_upload", { method: "POST", body: fd });
+    const res = await fetch("/api/upload", { method: "POST", body: fd });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "Gagal menyiapkan pratinjau.");
-    previewId = data.preview_id;
+    if (!res.ok) throw new Error(data.error || "Upload gagal.");
+    currentJobId = data.job_id;
+    updateFileSummaryAfterUpload(data);
     await doPreview();
   } catch (err) {
     setPreviewLoading("⚠ " + err.message);
+    fileSummary.innerHTML = `<span class="badge">Gagal</span> ${escapeHtml(err.message)}`;
   }
 }
 
 async function doPreview() {
-  if (!previewId) return;
+  if (!currentJobId) return;
   setPreviewLoading("Menghitung tag sampel…");
   try {
     const res = await fetch("/api/preview", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        preview_id: previewId,
+        job_id: currentJobId,
         mode: currentMode(),
         default_category: effectiveCategory(),
         detect_contrast: el("detectContrast").checked,
@@ -345,7 +329,11 @@ function renderWarnings(data) {
 }
 
 function resetPreview(clearArea = true) {
-  previewId = null;
+  if (currentJobId) {
+    // Buang job lama dari disk (mis. ganti pilihan file) agar tak menumpuk.
+    fetch(`/api/discard/${currentJobId}`, { method: "POST" }).catch(() => {});
+  }
+  currentJobId = null;
   previewReady = false;
   el("warnings").innerHTML = "";
   if (clearArea) {
@@ -372,7 +360,7 @@ function listenProgress(jobId) {
       es.close();
       showError(msg.message || "Terjadi kesalahan saat konversi.");
       lockUI(false);
-      convertBtn.textContent = "Konversi";
+      convertBtn.textContent = "Konversi Semua";
     }
   };
   es.onerror = () => {
@@ -479,7 +467,7 @@ el("resetBtn").addEventListener("click", () => {
   el("barFill").style.width = "0%";
   lockUI(false);
   convertBtn.disabled = true;
-  convertBtn.textContent = "Konversi";
+  convertBtn.textContent = "Konversi Semua";
   window.scrollTo({ top: 0, behavior: "smooth" });
 });
 

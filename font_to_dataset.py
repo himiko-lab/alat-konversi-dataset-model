@@ -304,13 +304,18 @@ def new_stats():
 def folder_tag_for(rel_path, root_name=None):
     """Tentukan tag folder dari path relatif (dipakai mode 'Berbasis folder' di web).
 
-    Mengikuti perilaku CLI --use-folder-tag: kategori = nama subfolder
-    pembungkus langsung font, KECUALI kalau itu folder root yang dipilih.
-    Contoh: 'Fonts/Serif/Foo.ttf' -> 'serif'; 'Fonts/Foo.ttf' -> None.
+    Kategori = nama subfolder pembungkus langsung font, KECUALI kalau itu folder
+    root pembungkus (root_name) — sehingga konsisten baik untuk upload folder
+    (webkitdirectory selalu menambah nama folder terpilih sbg komponen pertama)
+    maupun isi ZIP (tanpa pembungkus).
+
+    Contoh (root_name='Fonts'): 'Fonts/Serif/Foo.ttf' -> 'serif';
+    'Fonts/Foo.ttf' -> None.   Contoh ZIP (root_name=None): 'Serif/Foo.ttf' ->
+    'serif'; 'Foo.ttf' -> None.
     """
     rel_path = rel_path.replace("\\", "/")
     parts = [p for p in rel_path.split("/") if p]
-    if len(parts) < 3:
+    if len(parts) < 2:
         return None
     parent = parts[-2]
     if root_name is not None and parent == root_name:

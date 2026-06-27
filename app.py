@@ -41,7 +41,6 @@ os.makedirs(WORK_ROOT, exist_ok=True)
 
 # Registry job dalam memori (cukup untuk pemakaian lokal satu pengguna).
 JOBS = {}
-PREVIEWS = {}            # preview_id -> {samples:[{name,rel,path}], root_name}
 JOBS_LOCK = threading.Lock()
 
 
@@ -76,6 +75,58 @@ def _safe_rel(rel, fallback):
     return "/".join(parts), parts
 
 
+def _extract_zip_fonts(stream, up_dir, accepted, root_names):
+    """Ekstrak HANYA file font dari sebuah ZIP ke up_dir (struktur folder di
+    dalam ZIP dipertahankan). Isi non-font TIDAK pernah ditulis ke disk —
+    langsung dilewati — supaya penyimpanan tetap bersih. Aman dari zip-slip.
+
+    Mengembalikan (jumlah_font, jumlah_dibuang). (-1, 0) bila ZIP rusak."""
+    try:
+        zf = zipfile.ZipFile(stream)
+    except Exception:
+        return -1, 0
+    up_abs = os.path.abspath(up_dir)
+    n_font, n_other = 0, 0
+    with zf:
+        for member in zf.infolist():
+            if member.is_dir():
+                continue
+            name = (member.filename or "").replace("\\", "/")
+            base = os.path.basename(name)
+            # Lewati sampah metadata macOS & yang bukan font.
+            if not base or base.startswith("._") or "__MACOSX/" in (name + "/"):
+                n_other += 1
+                continue
+            if not _allowed(base):
+                n_other += 1
+                continue
+            safe_rel, parts = _safe_rel(name, base)
+            dst = os.path.join(up_dir, safe_rel)
+            if not os.path.abspath(dst).startswith(up_abs + os.sep):  # guard zip-slip
+                n_other += 1
+                continue
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            try:
+                with zf.open(member) as src, open(dst, "wb") as out:
+                    shutil.copyfileobj(src, out)
+            except Exception:
+                n_other += 1
+                continue
+            if len(parts) >= 2:
+                root_names.add(parts[0])
+            accepted.append({"name": base, "rel": safe_rel, "path": dst})
+            n_font += 1
+    return n_font, n_other
+
+
+def _sample(files, n=8):
+    """Ambil hingga n font merata dari daftar (untuk pratinjau tag)."""
+    if len(files) <= n:
+        return list(files)
+    step = len(files) / n
+    return [files[int(i * step)] for i in range(n)]
+
+
 # --------------------------------------------------------------------------- #
 #  UPLOAD                                                                      #
 # --------------------------------------------------------------------------- #
@@ -97,12 +148,26 @@ def upload():
     os.makedirs(up_dir, exist_ok=True)
 
     accepted, rejected, root_names = [], [], set()
+    n_from_zip = 0       # font hasil ekstraksi ZIP
+    n_discarded = 0      # isi non-font di dalam ZIP yang dibuang otomatis
     for idx, fs in enumerate(files):
         rel = rel_paths[idx] if idx < len(rel_paths) and rel_paths[idx] else fs.filename
         base = os.path.basename((rel or "").replace("\\", "/").lstrip("/"))
-        if not base or not _allowed(base):
-            if base:
-                rejected.append(base)
+        if not base:
+            continue
+
+        # ZIP: ekstrak font-nya saja, buang sisanya (tak ditulis ke disk).
+        if base.lower().endswith(".zip"):
+            nf, no = _extract_zip_fonts(fs.stream, up_dir, accepted, root_names)
+            if nf < 0:
+                rejected.append(base + " (ZIP rusak)")
+            else:
+                n_from_zip += nf
+                n_discarded += no
+            continue
+
+        if not _allowed(base):
+            rejected.append(base)
             continue
 
         # Bersihkan tiap komponen path tapi pertahankan struktur folder.
@@ -118,8 +183,8 @@ def upload():
     if not accepted:
         shutil.rmtree(jdir, ignore_errors=True)
         return jsonify(
-            error="Tidak ada file font yang valid (.otf/.ttf/.ttc).",
-            rejected=rejected,
+            error="Tidak ada file font valid (.otf/.ttf/.ttc) ditemukan.",
+            rejected=rejected, discarded=n_discarded,
         ), 400
 
     # Kalau seluruh batch berasal dari satu folder root, catat namanya supaya
@@ -144,64 +209,33 @@ def upload():
         job_id=job_id,
         accepted=len(accepted),
         rejected=rejected,
+        from_zip=n_from_zip,
+        discarded=n_discarded,
         names=[a["name"] for a in accepted[:50]],
     )
 
 
 # --------------------------------------------------------------------------- #
-#  PREVIEW TAG (sampel font, sebelum konversi penuh)                           #
+#  PREVIEW TAG (sampel font dari job yang sudah diunggah)                       #
 # --------------------------------------------------------------------------- #
-@app.route("/api/preview_upload", methods=["POST"])
-def preview_upload():
-    """Unggah HANYA font sampel (5–10) untuk preview tag cepat. Terpisah dari
-    upload penuh supaya preview ringan & bisa live saat opsi diubah."""
-    files = request.files.getlist("files")
-    rel_paths = request.form.getlist("paths")
-    root_name = (request.form.get("root_name") or "").strip() or None
-    if not files:
-        return jsonify(error="Tidak ada sampel."), 400
-
-    preview_id = uuid.uuid4().hex
-    pdir = os.path.join(_job_dir("preview_" + preview_id), "sample")
-    os.makedirs(pdir, exist_ok=True)
-
-    samples = []
-    for idx, fs in enumerate(files):
-        rel = rel_paths[idx] if idx < len(rel_paths) and rel_paths[idx] else fs.filename
-        base = os.path.basename((rel or "").replace("\\", "/").lstrip("/"))
-        if not base or not _allowed(base):
-            continue
-        safe_rel, _ = _safe_rel(rel, base)
-        dst = os.path.join(pdir, secure_filename(base))
-        fs.save(dst)
-        samples.append({"name": base, "rel": safe_rel, "path": dst})
-
-    if not samples:
-        return jsonify(error="Sampel tidak valid."), 400
-
-    with JOBS_LOCK:
-        PREVIEWS[preview_id] = {"samples": samples, "root_name": root_name,
-                                "dir": _job_dir("preview_" + preview_id)}
-    return jsonify(preview_id=preview_id, count=len(samples))
-
-
 @app.route("/api/preview", methods=["POST"])
 def preview():
-    """Hitung tag untuk sampel dengan opsi saat ini. Live: dipanggil ulang
-    tiap kali pengguna mengubah mode/kategori/kontras (tanpa unggah ulang)."""
+    """Hitung tag untuk beberapa font sampel dari job dengan opsi saat ini.
+    Live: dipanggil ulang tiap kali mode/kategori/kontras diubah (tanpa unggah
+    ulang — font sudah ada di server)."""
     data = request.get_json(force=True, silent=True) or {}
     with JOBS_LOCK:
-        pv = PREVIEWS.get(data.get("preview_id"))
-    if not pv:
-        return jsonify(error="Sesi preview tidak ditemukan. Pilih file lagi."), 404
+        job = JOBS.get(data.get("job_id"))
+    if not job:
+        return jsonify(error="Sesi tidak ditemukan. Pilih file lagi."), 404
 
     mode = data.get("mode", "auto")
     default_category = (data.get("default_category") or "").strip() or None
     detect_contrast = bool(data.get("detect_contrast"))
 
     rows, descs = [], Counter()
-    for s in pv["samples"]:
-        folder_tag = fd.folder_tag_for(s["rel"], pv["root_name"]) if mode == "folder" else None
+    for s in _sample(job["files"], 8):
+        folder_tag = fd.folder_tag_for(s["rel"], job.get("root_name")) if mode == "folder" else None
         fopts = _build_fopts(mode, default_category, folder_tag, detect_contrast)
         info = fd.preview_tag(s["path"], fopts, folder_tag=fopts["folder_tag"])
         if info is None:
@@ -518,6 +552,16 @@ def cleanup(job_id):
     hasil dataset tetap disimpan agar bisa di-download ulang."""
     up_dir = os.path.join(_job_dir(job_id), "uploads")
     shutil.rmtree(up_dir, ignore_errors=True)
+    return jsonify(ok=True)
+
+
+@app.route("/api/discard/<job_id>", methods=["POST"])
+def discard(job_id):
+    """Buang SELURUH job (mis. saat pengguna memilih ulang file sebelum
+    konversi) supaya upload yang ditinggalkan tidak memenuhi disk."""
+    shutil.rmtree(_job_dir(job_id), ignore_errors=True)
+    with JOBS_LOCK:
+        JOBS.pop(job_id, None)
     return jsonify(ok=True)
 
 
