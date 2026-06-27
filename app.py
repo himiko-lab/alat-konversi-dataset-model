@@ -426,9 +426,20 @@ def index():
 
 
 if __name__ == "__main__":
+    import webbrowser
+
+    # Port 8000 supaya tidak bentrok dengan AirPlay Receiver macOS (yang
+    # memakai port 5000). Bisa diganti lewat env var PORT bila perlu.
+    port = int(os.environ.get("PORT", "8000"))
+    url = f"http://127.0.0.1:{port}"
+
     print("=" * 60)
     print(" Konverter Font -> Dataset  (LOKAL)")
-    print(" Buka:  http://localhost:5000")
+    print(f" Buka:  {url}")
+    print(" Browser akan terbuka otomatis sebentar lagi.")
     print(" Tekan CTRL+C untuk berhenti.")
     print("=" * 60)
-    app.run(host="127.0.0.1", port=5000, threaded=True, debug=False)
+
+    # Buka browser otomatis sesaat setelah server siap melayani.
+    threading.Timer(1.3, lambda: webbrowser.open(url)).start()
+    app.run(host="127.0.0.1", port=port, threaded=True, debug=False)
