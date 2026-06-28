@@ -16,10 +16,12 @@ kompatibel dengan pipeline training yang sudah ada.
 
 - **Upload jumbo** — drag-and-drop, pilih banyak file, atau seret/pilih satu
   folder utuh (`webkitdirectory`) agar struktur folder terjaga.
-- **Dukungan ZIP** — unggah `.zip`; server otomatis mengekstrak hanya file font
-  (`.otf`/`.ttf`/`.ttc`) sambil mempertahankan struktur folder di dalamnya.
-  Isi non-font **tidak pernah ditulis ke disk** (langsung dibuang saat ekstraksi),
-  jadi penyimpanan tetap bersih. Aman dari zip-slip.
+- **Dukungan ZIP** — unggah `.zip`; server otomatis mengekstrak **hanya file
+  `.otf`** (di dalam ZIP, `.ttf`/`.ttc` ikut dibuang) sambil mempertahankan
+  struktur folder di dalamnya. Apa pun selain `.otf` **tidak pernah ditulis ke
+  disk** (langsung dibuang saat ekstraksi), jadi penyimpanan tetap bersih. Aman
+  dari zip-slip. (Catatan: upload file lepas/non-ZIP tetap menerima
+  `.otf`/`.ttf`/`.ttc`.)
 - **Pratinjau tag (live)** — sebelum memproses ribuan glyph, lihat dulu tag yang
   akan dihasilkan dari beberapa font sampel. Tabel ikut berubah otomatis saat
   opsi diubah. Tombol "Konversi Semua" baru aktif setelah pratinjau tampil.

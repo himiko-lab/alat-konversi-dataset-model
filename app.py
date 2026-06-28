@@ -76,11 +76,13 @@ def _safe_rel(rel, fallback):
 
 
 def _extract_zip_fonts(stream, up_dir, accepted, root_names):
-    """Ekstrak HANYA file font dari sebuah ZIP ke up_dir (struktur folder di
-    dalam ZIP dipertahankan). Isi non-font TIDAK pernah ditulis ke disk —
-    langsung dilewati — supaya penyimpanan tetap bersih. Aman dari zip-slip.
+    """Ekstrak HANYA file .otf dari sebuah ZIP ke up_dir (struktur folder di
+    dalam ZIP dipertahankan). Di dalam ZIP, .ttf/.ttc DIANGGAP non-target dan
+    ikut dibuang (sesuai permintaan: ZIP cuma cari .otf). Apa pun selain .otf
+    TIDAK pernah ditulis ke disk supaya penyimpanan tetap bersih. Aman dari
+    zip-slip.
 
-    Mengembalikan (jumlah_font, jumlah_dibuang). (-1, 0) bila ZIP rusak."""
+    Mengembalikan (jumlah_otf, jumlah_dibuang). (-1, 0) bila ZIP rusak."""
     try:
         zf = zipfile.ZipFile(stream)
     except Exception:
@@ -97,7 +99,7 @@ def _extract_zip_fonts(stream, up_dir, accepted, root_names):
             if not base or base.startswith("._") or "__MACOSX/" in (name + "/"):
                 n_other += 1
                 continue
-            if not _allowed(base):
+            if not base.lower().endswith(".otf"):  # ZIP: hanya .otf (buang ttf/ttc/lainnya)
                 n_other += 1
                 continue
             safe_rel, parts = _safe_rel(name, base)
